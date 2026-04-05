@@ -32,10 +32,8 @@ import {
 	LineToolPaneView,
 	PaneCursorType,
 	TextRendererData,
-	getToolCullingState,
-    OffScreenState,
 	LineToolPoint,
-	LineToolCullingInfo
+
 } from 'lightweight-charts-line-tools-core';
 
 // Import the specific tool model for strong typing (LineToolRectangle)
@@ -120,6 +118,19 @@ export class LineToolRectanglePaneView<HorzScaleItem> extends LineToolPaneView<H
 			return;
 		}
 
+		/**
+		 * CULLING CHECK
+		 * 
+		 * We query the Model's pre-calculated state. This check now correctly 
+		 * accounts for 2D area visibility and infinite extensions, ensuring 
+		 * the background fill remains visible when the user is zoomed in.
+		 */
+		if (this._tool.isCulled()) {
+			//TODO this tool needs cull testing
+			//console.log('rectangle culled')
+			return;
+		}
+
 		const hasUpdatedPoints = this._updatePoints();
 		//console.log(`[RectanglePaneView] _updatePoints() returned: ${hasUpdatedPoints}`);
 
@@ -128,118 +139,7 @@ export class LineToolRectanglePaneView<HorzScaleItem> extends LineToolPaneView<H
 			return;
 		}
 
-		// P0 and P1 are the current points (unstable)
-		const P0_cull = this._tool.getPoint(0)!;
-		const P1_cull = this._tool.getPoint(1)!;
 		
-		// --- CULLING IMPLEMENTATION START (Using Sub-Segment Culling Strategy) ---
-		if (this._points.length >= this._tool.pointsCount && !this._tool.isCreating() && !this._tool.isEditing()) {
-			
-			// 1. Calculate the Four Geometric Corner Points (Logical)
-			const minTime = Math.min(P0_cull.timestamp, P1_cull.timestamp);
-			const maxTime = Math.max(P0_cull.timestamp, P1_cull.timestamp);
-			const minPrice = Math.min(P0_cull.price, P1_cull.price);
-			const maxPrice = Math.max(P0_cull.price, P1_cull.price);
-
-			const P_TL: LineToolPoint = { timestamp: minTime, price: maxPrice };
-			const P_TR: LineToolPoint = { timestamp: maxTime, price: maxPrice };
-			const P_BL: LineToolPoint = { timestamp: minTime, price: minPrice };
-			const P_BR: LineToolPoint = { timestamp: maxTime, price: minPrice };
-
-			// The culler expects a single flat array of points to define the geometry.
-			const cullingPoints: LineToolPoint[] = [P_TL, P_TR, P_BL, P_BR];
-			
-			/**
-			 * **Tutorial Note - Advanced Culling Strategy:**
-			 * A standard Bounding Box check is insufficient for a Rectangle tool if it has **Infinite Extensions**.
-			 * 
-			 * If `extend.right` is true, the rectangle might logically start off-screen to the left, 
-			 * but stretch across the entire screen. A simple "Is Top-Left point visible?" check would fail.
-			 * 
-			 * Here, we define a `` `LineToolCullingInfo` `` object that tells the Core's culling engine to 
-			 * treat the rectangle as two specific horizontal line segments:
-			 * 1. **Top Edge:** From Top-Left (0) to Top-Right (1)
-			 * 2. **Bottom Edge:** From Bottom-Left (2) to Bottom-Right (3)
-			 * 
-			 * This forces the engine to use robust line-clipping math on these edges to determine visibility.
-			 */
-			const cullingInfo: LineToolCullingInfo = {
-				// Define the two horizontal edges for extension checking
-				subSegments: [
-					[0, 1], // Top Edge (P_TL -> P_TR)
-					[2, 3]  // Bottom Edge (P_BL -> P_BR)
-				]
-			};
-
-			const extendOptions = options.rectangle.extend;
-
-			// 2. Get the Culling State from the Core Helper (Using the full sub-segment check)
-
-			/**
-			 * **Tutorial Note - The Culling Engine Call:**
-			 * We invoke `` `getToolCullingState` `` from the Core to perform the heavy geometric lifting.
-			 * 
-			 * **Parameters Explained:**
-			 * 1. `cullingPoints`: A flat array of the 4 corner points (Top-Left, Top-Right, Bottom-Left, Bottom-Right) 
-			 *    we just calculated.
-			 * 2. `this._tool`: Context used to access the Chart's current viewport bounds (Time/Price ranges).
-			 * 3. `extendOptions`: Crucial. Tells the engine "This shape extends infinitely to the Left/Right".
-			 * 4. `undefined`: We skip the `singlePointOrientation` param (used for Crosshairs/Vertical lines).
-			 * 5. `cullingInfo`: The structure defined above, instructing the engine to check the Top/Bottom segments specifically.
-			 * 
-			 * **Result:**
-			 * Returns an `` `OffScreenState` ``. If it returns `Visible`, we draw. If it returns a directional miss 
-			 * (e.g., `OffScreenLeft`), we check if the extension allows it to be seen anyway.
-			 */
-			const cullingState = getToolCullingState(cullingPoints, this._tool, extendOptions, undefined, cullingInfo);
- 
-			// 3. Apply Custom Culling Logic based on State and Extend Options
-			let shouldCull = false;
-
-			switch (cullingState) {
- 
-				case OffScreenState.OffScreenTop:
-				case OffScreenState.OffScreenBottom:
-					// Vertical miss is a strong cull signal (no horizontal extension can save it)
-					shouldCull = true;
-					break;
-
-				case OffScreenState.OffScreenLeft:
-					// Tool is off-screen left. Only render if it extends infinitely to the right (extend.right is true)
-					if (extendOptions.right !== true) {
-						shouldCull = true;
-					}
-					break;
-
-				case OffScreenState.OffScreenRight:
-					// Tool is off-screen right. Only render if it extends infinitely to the left (extend.left is true)
-					if (extendOptions.left !== true) {
-						shouldCull = true;
-					}
-					break;
-
-				case OffScreenState.FullyOffScreen:
-					// Catch-all for disconnected tools
-					shouldCull = true;
-					break;
- 
-				case OffScreenState.Visible:
-				default:
-					// Tool is visible or horizontally overlaps, proceed to render
-					shouldCull = false;
-					break;
-			}
-
-			if (shouldCull) {
-				// Stop rendering logic immediately and clear the renderer for efficiency.
-				
-				(this._renderer as CompositeRenderer<any>).clear();
-				//console.log('rectangle culled')
-				return;
-			}
-		}
-		// --- CULLING IMPLEMENTATION END ---
-
 		//console.log(`[RectanglePaneView] Points available for drawing: ${this._points.length}`);
 		if (this._points.length > 0) {
 			//console.log('[RectanglePaneView] Point details:', JSON.parse(JSON.stringify(this._points)));

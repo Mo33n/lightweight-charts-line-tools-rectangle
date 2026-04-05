@@ -35,6 +35,8 @@ import {
 	InteractionPhase,
 	PriceAxisLabelStackingManager,
 	ConstraintResult,
+	getToolCullingState,
+	OffScreenState,
 } from 'lightweight-charts-line-tools-core'; // All core plugin types from this single import
 import { LineToolRectanglePaneView } from '../views/LineToolRectanglePaneView'; // Specific PaneView for this tool
 
@@ -88,9 +90,9 @@ export const RectangleOptionDefaults: LineToolOptionsInternal<'Rectangle'> = {
 			scale: 1,
 			padding: { x: 0, y: 0 },
 			maxHeight: 0, // Placeholder
-			shadow: { blur: 0, color: 'transparent', offset: { x: 0, y: 0 } },
-			border: { color: 'transparent', width: 0, radius: 0, highlight: false, style: LineStyle.Solid },
-			background: { color: 'transparent', inflation: { x: 0, y: 0 } },
+			shadow: { blur: 0, color: 'rgba(0,0,0,0)', offset: { x: 0, y: 0 } },
+			border: { color: 'rgba(0,0,0,0)', width: 0, radius: 0, highlight: false, style: LineStyle.Solid },
+			background: { color: 'rgba(0,0,0,0)', inflation: { x: 0, y: 0 } },
 		},
 		padding: 0,
 		wordWrapWidth: 0,
@@ -558,6 +560,51 @@ export class LineToolRectangle<HorzScaleItem> extends BaseLineTool<HorzScaleItem
 				break;
 		}
 	}
+
+	/**
+	 * Calculates the Rectangle's visibility based on its 2D area.
+	 * 
+	 * ### Tutorial Note on Rectangle Culling
+	 * A Rectangle represents a solid block of space. To prevent the background 
+	 * color from "popping" out when the borders leave the viewport, we use 
+	 * the core's Area-Based culling mode.
+	 * 
+	 * By passing `isAreaBased: true`, we instruct the engine to perform a 
+	 * 2D bounding box intersection test. This test accounts for infinite 
+	 * horizontal extensions, ensuring that as long as the user is looking 
+	 * at any part of the rectangle's 'Zone of Influence', the tool stays active.
+	 * 
+	 * @protected
+	 * @override
+	 */
+	protected override updateCullingState(): void {
+		const points = this.points();
+		const options = this.options();
+
+		// 1. Guard: Skip culling during interaction to prevent visual flickering.
+		if (this.getPermanentPointsCount() < this.pointsCount || this.isCreating() || this.isEditing()) {
+			this._setIsCulled(false);
+			return;
+		}
+
+		// --- AREA-BASED CULLING START ---
+
+		// 2. Invoke the Core Culler in Area-Based mode.
+		// We pass the 2 logical anchors. The core will find the min/max bounds, 
+		// apply extensions, and perform a single O(1) overlap check.
+		const cullingState = getToolCullingState(
+			points, 
+			this, 
+			options.rectangle.extend, 
+			undefined, 
+			undefined, 
+			true // isAreaBased: true
+		);
+
+		this._setIsCulled(cullingState !== OffScreenState.Visible);
+
+		// --- AREA-BASED CULLING END ---
+	}	
 	
 
 	/**
